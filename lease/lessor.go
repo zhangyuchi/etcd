@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"log"
 	"math"
 	"sort"
 	"sync"
@@ -363,6 +364,8 @@ func (le *lessor) Checkpoint(id LeaseID, remainingTTL int64) error {
 // Renew renews an existing lease. If the given lease does not exist or
 // has expired, an error will be returned.
 func (le *lessor) Renew(id LeaseID) (int64, error) {
+	t0 := time.Now()
+
 	le.mu.RLock()
 	if !le.isPrimary() {
 		// forward renew request to primary instead of returning error.
@@ -397,6 +400,8 @@ func (le *lessor) Renew(id LeaseID) (int64, error) {
 		}
 	}
 
+	t1 := time.Now()
+
 	// Clear remaining TTL when we renew if it is set
 	// By applying a RAFT entry only when the remainingTTL is already set, we limit the number
 	// of RAFT entries written per lease to a max of 2 per checkpoint interval.
@@ -404,13 +409,20 @@ func (le *lessor) Renew(id LeaseID) (int64, error) {
 		le.cp(context.Background(), &pb.LeaseCheckpointRequest{Checkpoints: []*pb.LeaseCheckpoint{{ID: int64(l.ID), Remaining_TTL: 0}}})
 	}
 
+	t2 := time.Now()
+
 	le.mu.Lock()
 	l.refresh(0)
 	item := &LeaseWithTime{id: l.ID, time: l.expiry.UnixNano()}
 	le.leaseExpiredNotifier.RegisterOrUpdate(item)
 	le.mu.Unlock()
 
+	t3 := time.Now()
+
 	leaseRenewed.Inc()
+
+	log.Printf("lessor.Renew t1=%dms, t2=%dms, t3=%dms\n", t1.Sub(t0).Milliseconds(), t2.Sub(t1).Milliseconds(), t3.Sub(t2).Milliseconds())
+
 	return l.ttl, nil
 }
 
